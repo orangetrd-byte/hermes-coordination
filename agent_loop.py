@@ -32,6 +32,9 @@ BLACKLISTED_TYPE = {"yield", "inference"}
 ALLOWED_SENDERS = {"Hermes"}
 RESPONDED_IDS = object()  # fake default
 
+# Burst-test mode: limit replies per run
+_BURST_REPLY_LIMIT = int(os.environ.get("HERMES_BURST_REPLY_LIMIT", "0"))
+
 
 def api(path, data=None, method="GET"):
     url = f"https://{HOST}:{PORT}{path}"
@@ -61,42 +64,35 @@ def api(path, data=None, method="GET"):
 def build_reply(message):
     sender = message.get("from", "")
     content = (message.get("content") or "").strip()
-    kind = (message.get("status") or message.get("type") or "chat").lower()
-    if kind == "status":
-        return {
-            "from": "Codex",
-            "to": sender,
-            "type": "status",
-            "content": "Idle, ready for assignment.",
-            "status": "open",
-        }
-    if kind == "assign":
-        return {
-            "from": "GPT",
-            "to": sender,
-            "type": "status",
-            "content": f"Acknowledged: {content}.",
-            "status": "open",
-        }
-    if kind == "done":
-        return {
-            "from": "GPT",
-            "to": sender,
-            "type": "done",
-            "content": "Marked done.",
-            "status": "done",
-        }
-    if kind == "yield":
-        return {
-            "from": "Ollama",
-            "to": sender,
-            "type": "yield",
-            "content": "Yield acknowledged.",
-            "status": "yield",
-        }
-    if kind == "inference":
-        return ollama_reply(content, sender)
-    return ollama_reply(content, sender)
+    kind = _kind(message)
+    reply_type = kind if kind in {"chat", "assign", "status", "done", "yield", "inference"} else "chat"
+    text = ""
+    if reply_type == "inference":
+        text = ollama_reply_inline(content, sender)
+    elif reply_type == "assign":
+        text = f"Acknowledged: {content}."
+    elif reply_type == "status":
+        text = "Idle, ready for assignment."
+    elif reply_type == "done":
+        text = "Marked done."
+    elif reply_type == "yield":
+        text = "Yield acknowledged."
+    else:
+        text = content or "I'm here."
+    return {
+        "from": "Ollama",
+        "to": sender or "all",
+        "type": reply_type,
+        "content": text,
+        "status": reply_type if reply_type not in {"assign", "status", "done", "yield", "inference"} else "open",
+    +    "assigned_to": sender if reply_type == "assign" else "",
+    }
+
+
+def ollama_reply_inline(content, sender):
+    out = ollama_reply(content, sender, retries=2)
+    out.pop("assigned_to", None)
+    return out
 
 
 def ollama_reply(content, sender, retries=2):
@@ -147,38 +143,57 @@ def ollama_reply(content, sender, retries=2):
     }
 
 
+def _kind(message):
+    return (message.get("type") or "chat").lower()
+
 def process_once():
     code, raw = api("/api/messages")
     if code != 200:
-        print("[list_failed]", code, raw)
+        print("[list_failed]", code)
         return None
     msgs = json.loads(raw)
     if not msgs:
         return None
+    sent = 0
     for recent in msgs:
         mid = recent.get("id")
         sender = recent.get("from", "")
-        kind = (recent.get("status") or recent.get("type") or "chat").lower()
+        kind = _kind(recent)
         if not mid:
             continue
         if kind in BLACKLISTED_TYPE:
             continue
         if sender not in ALLOWED_SENDERS:
             continue
-        reply = build_reply(recent)
+        if kind in {"assign", "status", "done", "chat", "yield", "inference"}:
+            reply = build_reply(recent)
+        else:
+            continue
         if not reply.get("content"):
             continue
-        code2, raw2 = api("/api/reply", {
+        claim_payload = {"source_id": mid, "worker": WORKER_ID}
+        ccode, craw = api("/api/claim", claim_payload, method="POST")
+        if ccode == 409:
+            continue
+        if ccode != 200:
+            print("[claim_failed]", ccode, craw[:120] if isinstance(craw, str) else craw)
+            continue
+        reply_payload = {
             "source_id": mid,
+            "worker": WORKER_ID,
             "from": reply.get("from", "Ollama"),
             "to": reply.get("to", "all"),
-            "type": reply.get("type", "chat"),
+            "type": reply.get("type", kind),
             "content": reply.get("content", ""),
-            "status": reply.get("status", "open"),
-        }, method="POST")
+            "status": reply.get("status") or reply.get("type") or "open",
+        }
+        code2, raw2 = api("/api/reply", reply_payload, method="POST")
         if code2 == 200:
-            print("[send]", reply.get("from"), "->", reply.get("to"), reply.get("content")[:80])
-            return reply
+            print("[send]", reply_payload["from"], "->", reply_payload["to"], reply_payload["content"][:80])
+            sent += 1
+            if _BURST_REPLY_LIMIT and sent >= _BURST_REPLY_LIMIT:
+                return reply
+            continue
         if code2 == 409:
             continue
         print("[send_failed]", code2, raw2)
@@ -188,7 +203,7 @@ def process_once():
 
 def main():
     print(
-        f"[agent_loop] started port={PORT} pin={PIN} model={OLLAMA_MODEL} interval={POLL_INTERVAL}s"
+        f"[agent_loop] started model={OLLAMA_MODEL} interval={POLL_INTERVAL}s"
     )
     while True:
         try:

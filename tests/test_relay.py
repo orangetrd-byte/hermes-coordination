@@ -171,6 +171,57 @@ class RelayApiTests(unittest.TestCase):
         self.assertEqual(relay.DATA.read_bytes(), original)
         self.assertFalse(list(self.temp_path.glob(".*.tmp")))
 
+    def test_claim_reply_burst_exactly_once(self):
+        sources = [self.post_source(f"source-{idx}") for idx in range(5)]
+        replies = []
+        for source in sources:
+            claim, _ = self.request(
+                "POST", "/api/claim", {"source_id": source["id"], "worker": "tester"}
+            )
+            self.assertEqual(claim, 200)
+            reply, stored = self.request(
+                "POST",
+                "/api/reply",
+                {
+                    "source_id": source["id"],
+                    "worker": "tester",
+                    "from": "Ollama",
+                    "to": source["from"],
+                    "content": f"reply-{source['id']}",
+                    "type": "chat",
+                },
+            )
+            self.assertEqual(reply, 200)
+            replies.append(stored)
+        for source in sources:
+            dup, _ = self.request(
+                "POST", "/api/claim", {"source_id": source["id"], "worker": "tester"}
+            )
+            self.assertEqual(dup, 409)
+            dup_reply, _ = self.request(
+                "POST",
+                "/api/reply",
+                {
+                    "source_id": source["id"],
+                    "worker": "tester",
+                    "from": "Ollama",
+                    "to": source["from"],
+                    "content": "again",
+                },
+            )
+            self.assertEqual(dup_reply, 409)
+        data = json.loads(relay.DATA.read_text(encoding="utf-8"))
+        response_ids = [
+            item["id"]
+            for item in data["messages"]
+            if item.get("in_reply_to") is not None
+        ]
+        self.assertEqual(len(response_ids), len(sources))
+        self.assertEqual(len(set(response_ids)), len(sources))
+        for source in sources:
+            counts = sum(1 for item in data["messages"] if item.get("in_reply_to") == source["id"])
+            self.assertEqual(counts, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

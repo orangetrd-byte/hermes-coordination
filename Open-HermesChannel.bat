@@ -1,5 +1,6 @@
 @echo off
-set "URL=http://192.168.10.196:8787"
+setlocal EnableExtensions DisableDelayedExpansion
+set "URL=https://127.0.0.1:%HERMES_CHANNEL_PORT%"
 set "RELAY=%~dp0relay.py"
 set "PYTHON="
 
@@ -9,11 +10,10 @@ if %errorlevel%==0 (
 )
 
 if not "%PYTHON%"=="" (
-  powershell -NoProfile -Command "try { invoke-webrequest -Uri '%URL%' -UseBasicParsing -timeout 2 | out-null } catch { exit 0 }"
+  powershell -NoProfile -Command "try { invoke-webrequest -UseBasicParsing -Uri '%URL%/api/health' -TimeoutSec 2 | out-null } catch { exit 0 }"
   if %errorlevel% neq 0 (
-    set "HERMES_CHANNEL_HOST=0.0.0.0"
     start /b "" "%PYTHON%" "%RELAY%"
-    powershell -NoProfile -Command "Start-Sleep -Milliseconds 700"
+    powershell -NoProfile -Command "Start-Sleep -Seconds 2"
   )
 ) else (
   msg * "Python not found"

@@ -42,6 +42,8 @@ class Handler(BaseHTTPRequestHandler):
         if p in ("/", "/index.html"):
             self.path = "/index.html"
             return self.serve_static("text/html")
+        if p == "/api/health":
+            return _json(self, {"ok": True})
         req_pin = self.headers.get("X-Channel-PIN")
         if req_pin != PIN:
             return _badge(self, 401, "PIN required or invalid")

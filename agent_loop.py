@@ -14,7 +14,6 @@ PIN = os.environ["HERMES_CHANNEL_PIN"]
 OLLAMA_HOST = os.environ.get("HERMES_OLLAMA_HOST", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("HERMES_OLLAMA_MODEL", "deepseek-coder-v2:16b")
 POLL_INTERVAL = float(os.environ.get("HERMES_POLL_INTERVAL", "2.0"))
-RESPOND_COOLDOWN = int(os.environ.get("HERMES_RESPOND_COOLDOWN", "30"))
 WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 
 CTX = ssl.create_default_context()
@@ -100,7 +99,7 @@ def build_reply(message):
     return ollama_reply(content, sender)
 
 
-def ollama_reply(content, sender):
+def ollama_reply(content, sender, retries=2):
     if not content:
         return {
             "from": "Ollama",
@@ -120,19 +119,25 @@ def ollama_reply(content, sender):
         "stream": False,
         "options": {"num_ctx": 1024, "num_predict": 128},
     }
-    try:
-        req = urllib.request.Request(
-            f"{OLLAMA_HOST}/api/generate",
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=120) as r:
-            result = json.loads(r.read().decode())
-            text = (result.get("response") or "").strip()
-    except Exception as e:
-        print("[ollama_error]", e)
-        text = "Local inference unavailable right now."
+    text = ""
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(
+                f"{OLLAMA_HOST}/api/generate",
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=120) as r:
+                result = json.loads(r.read().decode())
+                text = (result.get("response") or "").strip()
+            if text:
+                break
+        except Exception as e:
+            print("[ollama_error attempt]", attempt + 1, e)
+    
+    if not text:
+        text = "Inference failed after retries; will retry on next message."
     return {
         "from": "Ollama",
         "to": sender or "all",
@@ -150,48 +155,34 @@ def process_once():
     msgs = json.loads(raw)
     if not msgs:
         return None
-    recent = msgs[-1]
-    mid = recent.get("id")
-    sender = recent.get("from", "")
-    kind = (recent.get("status") or recent.get("type") or "chat").lower()
-    if not mid:
+    for recent in msgs:
+        mid = recent.get("id")
+        sender = recent.get("from", "")
+        kind = (recent.get("status") or recent.get("type") or "chat").lower()
+        if not mid:
+            continue
+        if kind in BLACKLISTED_TYPE:
+            continue
+        if sender not in ALLOWED_SENDERS:
+            continue
+        reply = build_reply(recent)
+        if not reply.get("content"):
+            continue
+        code2, raw2 = api("/api/reply", {
+            "source_id": mid,
+            "from": reply.get("from", "Ollama"),
+            "to": reply.get("to", "all"),
+            "type": reply.get("type", "chat"),
+            "content": reply.get("content", ""),
+            "status": reply.get("status", "open"),
+        }, method="POST")
+        if code2 == 200:
+            print("[send]", reply.get("from"), "->", reply.get("to"), reply.get("content")[:80])
+            return reply
+        if code2 == 409:
+            continue
+        print("[send_failed]", code2, raw2)
         return None
-    if kind in BLACKLISTED_TYPE:
-        print("[skip] type", kind)
-        return None
-    if sender not in ALLOWED_SENDERS:
-        print("[skip] sender", sender)
-        return None
-    claim_code, claim_raw = api(
-        "/api/claim",
-        {"source_id": mid, "worker": WORKER_ID},
-        method="POST",
-    )
-    if claim_code == 409:
-        print("[skip] already_claimed", mid)
-        return None
-    if claim_code != 200:
-        print("[claim_failed]", claim_code, claim_raw)
-        return None
-    reply = build_reply(recent)
-    if not reply.get("content"):
-        return None
-    code2, raw2 = api("/api/reply", {
-        "source_id": mid,
-        "worker": WORKER_ID,
-        "from": reply.get("from", "Ollama"),
-        "to": reply.get("to", "all"),
-        "type": reply.get("type", "chat"),
-        "content": reply.get("content", ""),
-        "status": reply.get("status", "open"),
-    }, method="POST")
-    if code2 == 200:
-        print("[send]", reply.get("from"), "->", reply.get("to"), reply.get("content")[:80])
-        return reply
-    if code2 == 409:
-        print("[skip] already_handled", mid)
-        return None
-    print("[send_failed]", code2, raw2)
     return None
 
 

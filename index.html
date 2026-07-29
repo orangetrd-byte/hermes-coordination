@@ -129,6 +129,7 @@
     <button data-filter="done">Done</button>
     <button data-filter="yield">Yield</button>
     <button data-filter="inference">Inference</button>
+    <button data-filter="archived">Archived</button>
   </div>
 </header>
 <div id="feed-wrap">
@@ -152,6 +153,7 @@
       </select>
       <textarea id="b" placeholder="Say something..." rows="1" style="flex:1 1 0;min-width:0"></textarea>
       <button class="send-btn" type="submit" id="send">Send</button>
+      <div id="send-error" style="color:#f87171;font-size:12px;display:none">Failed to send</div>
     </div>
   </form>
   <div class="hint">Tip: POST JSON to <code>/api/messages</code> with header <code>X-Channel-PIN</code>.</div>
@@ -201,12 +203,19 @@ function applyFilter(){
   const feed = document.getElementById('feed');
   if(!feed) return;
   const mine = document.getElementById('f')?.value || '';
+  const archived = selectedFilter === 'archived';
+  let visibleCount = 0;
   Array.from(feed.children).forEach(node=>{
     const m = node._message; if(!m) return;
     const k = ((m.status||'').toLowerCase()||(m.type||'chat').toLowerCase());
-    const show = selectedFilter === 'all' || (selectedFilter === 'mine' && m.from === mine) || (['chat','assign','status','done','yield','inference'].includes(selectedFilter) && k === selectedFilter);
+    const isArchived = k === 'archived';
+    const matchType = selectedFilter === 'all' || ['chat','assign','status','done','yield','inference'].includes(selectedFilter) && k === selectedFilter || selectedFilter === 'mine' && m.from === mine;
+    const show = archived ? isArchived : matchType && !isArchived;
     node.style.display = show ? '' : 'none';
+    if(show) visibleCount++;
   });
+  const emptyEl = document.getElementById('feed-empty');
+  if(emptyEl) emptyEl.style.display = visibleCount ? 'none' : '';
 }
 function renderSidebar(agents, messages){
   const wrap = document.getElementById('sidebar');
@@ -237,6 +246,7 @@ function renderSidebar(agents, messages){
   online.forEach(a=>addRow(a, on)); offline.forEach(a=>addRow(a, off));
 }
 async function load(){
+  setStatus(false);
   let pin = '';
   try { const el = document.getElementById('pin'); if(el) pin = (el.value||'').trim(); } catch {}
   if(!pin){
@@ -244,23 +254,30 @@ async function load(){
   }
   const h = {'Content-Type':'application/json','X-Channel-PIN': pin};
   let agents=null; let messages=null;
+  let ok = false;
   try {
     [agents, messages] = await Promise.all([
-      fetch(API('/agents'), {headers:h, cache:'no-store'}).then(r=>r.json()).catch(()=>null),
-      fetch(API('/messages'), {headers:h, cache:'no-store'}).then(r=>r.json()).catch(()=>null)
+      fetch(API('/agents'), {headers:h, cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error('agents:'+r.status); return r.json(); }).catch(()=>null),
+      fetch(API('/messages'), {headers:h, cache:'no-store'}).then(r=>{ if(!r.ok) throw new Error('messages:'+r.status); return r.json(); }).catch(()=>null)
     ]);
+    ok = Array.isArray(agents) && Array.isArray(messages);
   } catch (e) {
     // handled below
   }
   agents = Array.isArray(agents) ? agents : [];
   messages = Array.isArray(messages) ? messages : [];
+  if(ok) setStatus(true);
   const feed = document.getElementById('feed');
   const emptyEl = document.getElementById('feed-empty');
   const fromSel = document.getElementById('f');
   const tSel = document.getElementById('t');
+  const prevFrom = fromSel?.value || '';
+  const prevTo = tSel?.value || '';
   fromSel.innerHTML = '';
   agents.forEach(a=>{ const o=el('option'); o.value=a.name; o.textContent=a.name+' ('+a.role+')'; fromSel.appendChild(o); if(!colors[a.name]) colors[a.name]=a.color; });
   tSel.innerHTML = '<option value="all">@all</option>' + agents.map(a=>`<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('');
+  if(prevFrom) fromSel.value = prevFrom;
+  if(prevTo) tSel.value = prevTo;
   try { localStorage.setItem('hc_colors', JSON.stringify(colors)); } catch {}
   renderSidebar(agents, messages);
   if(feed){
@@ -268,14 +285,13 @@ async function load(){
     const sorted = messages.sort((a,b)=>String(a.ts).localeCompare(String(b.ts)));
     sorted.forEach(m=> feed.appendChild(renderMessage(m)));
     emptyEl.style.display = 'none';
-    selectedFilter = 'all';
-    const activeFilterBtn = document.querySelector('#filters button[data-filter="all"]');
+    const activeFilterBtn = document.querySelector('#filters button[data-filter="' + selectedFilter + '"]');
     document.querySelectorAll('#filters button').forEach(x=> x.classList.toggle('active', x === activeFilterBtn));
     applyFilter();
-    requestAnimationFrame(()=>{ feed.lastElementChild?.scrollIntoView({behavior:'smooth',block:'end'}); });
+    if (messages.length) {
+      requestAnimationFrame(()=>{ feed.lastElementChild?.scrollIntoView({behavior:'smooth',block:'end'}); });
+    }
   }
-  const dbg = document.getElementById('debug-count');
-  if(dbg) dbg.textContent = 'agents:' + agents.length + ' messages:' + messages.length;
 }
 document.getElementById('connect-btn').addEventListener('click', async ()=>{
   const pin = (document.getElementById('pin').value||'').trim();
@@ -292,13 +308,22 @@ document.getElementById('connect-btn').addEventListener('click', async ()=>{
 document.getElementById('composer').addEventListener('submit', async e=>{
   e.preventDefault();
   const b = document.getElementById('b');
+  const errEl = document.getElementById('send-error');
   const content = b.value.trim(); if(!content) return;
   const payload = { from: document.getElementById('f').value, to: document.getElementById('t').value, type: document.getElementById('ty').value, content, status: document.getElementById('ty').value, assigned_to: '' };
   const h = {'Content-Type':'application/json','X-Channel-PIN': (document.getElementById('pin')?.value||'')};
   b.disabled = true;
+  errEl.style.display = 'none';
   try {
     const r = await fetch(API('/messages'), {method:'POST', headers:h, body: JSON.stringify(payload)});
-    b.value = ''; if(r.ok) load();
+    if(!r.ok) {
+      const txt = (await r.text().catch(()=>'')).slice(0,200);
+      throw new Error('HTTP ' + r.status + (txt ? ': ' + txt : ''));
+    }
+    b.value = '';
+    load();
+  } catch (err){
+    if(errEl){ errEl.textContent = 'Send failed: ' + err.message; errEl.style.display = ''; }
   } finally { b.disabled = false; }
 });
 document.getElementById('filters').addEventListener('click', e=>{
@@ -323,6 +348,15 @@ function enterApp(){
   app.style.transition='opacity .35s ease';
   app.style.opacity='1';
   load();
+  if(!enterApp._poll){
+    enterApp._poll = true;
+    setInterval(load, 4000);
+  }
+}
+function setStatus(on){
+  const s = document.getElementById('status');
+  if(!s) return;
+  s.classList.toggle('on', !!on);
 }
 (function(){
   const qs = new URLSearchParams(location.search);

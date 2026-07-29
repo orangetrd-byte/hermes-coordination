@@ -1,0 +1,212 @@
+{
+  "agents": [
+    {
+      "name": "Hermes",
+      "role": "orchestrator",
+      "color": "#2563eb"
+    },
+    {
+      "name": "GPT",
+      "role": "coder",
+      "color": "#10b981"
+    },
+    {
+      "name": "Codex",
+      "role": "coder",
+      "color": "#f59e0b"
+    },
+    {
+      "name": "Ollama",
+      "role": "inference",
+      "color": "#a78bfa"
+    }
+  ],
+  "messages": [
+    {
+      "id": 20260728123055203148,
+      "ts": "2026-07-28T12:30:55.203167Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "Test msg 1",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260728123128094811,
+      "ts": "2026-07-28T12:31:28.094830Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "Channel is up. Send status/assign/done/yield.",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260728123128105407,
+      "ts": "2026-07-28T12:31:28.105426Z",
+      "from": "GPT",
+      "to": "Hermes",
+      "type": "status",
+      "content": "Idle, ready for assignment.",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260728123128115044,
+      "ts": "2026-07-28T12:31:28.115057Z",
+      "from": "Codex",
+      "to": "all",
+      "type": "status",
+      "content": "Ready for coding/patches.",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260728123128126347,
+      "ts": "2026-07-28T12:31:28.126372Z",
+      "from": "Hermes",
+      "to": "GPT",
+      "type": "assign",
+      "content": "Draft regex for sanitizing log lines before rules.mjs load.",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260728123128135708,
+      "ts": "2026-07-28T12:31:28.135724Z",
+      "from": "GPT",
+      "to": "Hermes",
+      "type": "done",
+      "content": "Drafted regex: strip control chars except newline, trim CRLF.",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260728124050926841,
+      "ts": "2026-07-28T12:40:50.926866Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "Channel is up from PowerShell.",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260728124547785650,
+      "ts": "2026-07-28T12:45:47.785675Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "user here, hello world",
+      "status": "chat",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729004846559641,
+      "ts": "2026-07-29T00:48:46.559738Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "overhaul verification ping",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729005114309272,
+      "ts": "2026-07-29T00:51:14.309290Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "Chrome local smoke test",
+      "status": "chat",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729005426335165,
+      "ts": "2026-07-29T00:54:26.335183Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "/status check",
+      "status": "chat",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729005934926824,
+      "ts": "2026-07-29T00:59:34.926843Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "looking good hermes",
+      "status": "chat",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729155449817435,
+      "ts": "2026-07-29T15:54:49.817501Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "Is it working?",
+      "status": "chat",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729160811393915,
+      "ts": "2026-07-29T16:08:11.393936Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "This test is for Hermes. 123456789",
+      "status": "chat",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729192623479307,
+      "ts": "2026-07-29T19:26:23.479363Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "Hello from verify",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729192754393646,
+      "ts": "2026-07-29T19:27:54.393661Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "Hello agents, reply once please.",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729193524060126,
+      "ts": "2026-07-29T19:35:24.060142Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "test loop reply please",
+      "status": "open",
+      "assigned_to": ""
+    },
+    {
+      "id": 20260729193845481242,
+      "ts": "2026-07-29T19:38:45.481258Z",
+      "from": "Hermes",
+      "to": "all",
+      "type": "chat",
+      "content": "hello from Mike",
+      "status": "open",
+      "assigned_to": ""
+    }
+  ],
+  "meta": {
+    "responded": [
+      20260729193524060126,
+      20260729193845481242
+    ]
+  }
+}

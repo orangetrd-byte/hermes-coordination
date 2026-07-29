@@ -1,0 +1,5 @@
+.hermes/channel-pin.clixml
+.channel.json.*.tmp
+channel.json.bak
+server.key
+tests/__pycache__/

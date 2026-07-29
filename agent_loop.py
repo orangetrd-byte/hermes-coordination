@@ -4,7 +4,7 @@ Hermes Agent Loop
 Polls /api/messages, and when a non-agent message appears,
 builds one reply and posts it.
 """
-import json, os, time, urllib.request, urllib.error, ssl
+import json, os, socket, time, urllib.request, urllib.error, ssl
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
@@ -15,6 +15,7 @@ OLLAMA_HOST = os.environ.get("HERMES_OLLAMA_HOST", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("HERMES_OLLAMA_MODEL", "deepseek-coder-v2:16b")
 POLL_INTERVAL = float(os.environ.get("HERMES_POLL_INTERVAL", "2.0"))
 RESPOND_COOLDOWN = int(os.environ.get("HERMES_RESPOND_COOLDOWN", "30"))
+WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 
 CTX = ssl.create_default_context()
 CTX.check_hostname = False
@@ -161,11 +162,23 @@ def process_once():
     if sender not in ALLOWED_SENDERS:
         print("[skip] sender", sender)
         return None
+    claim_code, claim_raw = api(
+        "/api/claim",
+        {"source_id": mid, "worker": WORKER_ID},
+        method="POST",
+    )
+    if claim_code == 409:
+        print("[skip] already_claimed", mid)
+        return None
+    if claim_code != 200:
+        print("[claim_failed]", claim_code, claim_raw)
+        return None
     reply = build_reply(recent)
     if not reply.get("content"):
         return None
     code2, raw2 = api("/api/reply", {
         "source_id": mid,
+        "worker": WORKER_ID,
         "from": reply.get("from", "Ollama"),
         "to": reply.get("to", "all"),
         "type": reply.get("type", "chat"),

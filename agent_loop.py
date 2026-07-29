@@ -8,7 +8,6 @@ import json, os, time, urllib.request, urllib.error, ssl
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
-DATA = BASE / "channel.json"
 PORT = int(os.environ["HERMES_CHANNEL_PORT"])
 HOST = os.environ["HERMES_CHANNEL_HOST"]
 PIN = os.environ["HERMES_CHANNEL_PIN"]
@@ -59,38 +58,10 @@ def api(path, data=None, method="GET"):
         return 0, str(e)
 
 
-def load_db():
-    try:
-        return json.loads(DATA.read_text())
-    except Exception:
-        return {"agents": list(AGENTS.values()), "messages": [], "meta": {"responded": []}}
-
-
-def save_db(db):
-    DATA.write_text(json.dumps(db, indent=2))
-
-
-def responded_set(db):
-    try:
-        return set(tuple(x) if isinstance(x, list) else x for x in db.get("meta", {}).get("responded", []))
-    except Exception:
-        return set()
-
-
-def mark_responded(db, mid):
-    meta = db.setdefault("meta", {})
-    responded = list(meta.get("responded", []))
-    responded.append(mid)
-    if len(responded) > 1000:
-        responded = responded[-1000:]
-    meta["responded"] = responded
-
-
 def build_reply(message):
     sender = message.get("from", "")
     content = (message.get("content") or "").strip()
     kind = (message.get("status") or message.get("type") or "chat").lower()
-
     if kind == "status":
         return {
             "from": "Codex",
@@ -161,7 +132,6 @@ def ollama_reply(content, sender):
     except Exception as e:
         print("[ollama_error]", e)
         text = "Local inference unavailable right now."
-
     return {
         "from": "Ollama",
         "to": sender or "all",
@@ -172,18 +142,18 @@ def ollama_reply(content, sender):
 
 
 def process_once():
-    db = load_db()
-    msgs = db.get("messages", [])
+    code, raw = api("/api/messages")
+    if code != 200:
+        print("[list_failed]", code, raw)
+        return None
+    msgs = json.loads(raw)
     if not msgs:
         return None
     recent = msgs[-1]
-    ts = recent.get("ts")
     mid = recent.get("id")
     sender = recent.get("from", "")
     kind = (recent.get("status") or recent.get("type") or "chat").lower()
-    if not ts:
-        return None
-    if mid is None:
+    if not mid:
         return None
     if kind in BLACKLISTED_TYPE:
         print("[skip] type", kind)
@@ -191,43 +161,31 @@ def process_once():
     if sender not in ALLOWED_SENDERS:
         print("[skip] sender", sender)
         return None
-    responded = responded_set(db)
-    if mid in responded:
-        print("[skip] already_responded", mid)
-        return None
     reply = build_reply(recent)
     if not reply.get("content"):
         return None
-    code, raw = api("/api/messages", {
+    code2, raw2 = api("/api/reply", {
+        "source_id": mid,
         "from": reply.get("from", "Ollama"),
         "to": reply.get("to", "all"),
         "type": reply.get("type", "chat"),
         "content": reply.get("content", ""),
         "status": reply.get("status", "open"),
-        "assigned_to": "",
     }, method="POST")
-    if code == 200:
-        mark_responded(db, mid)
-        save_db(db)
+    if code2 == 200:
         print("[send]", reply.get("from"), "->", reply.get("to"), reply.get("content")[:80])
         return reply
-    print("[send_failed]", code, raw)
+    if code2 == 409:
+        print("[skip] already_handled", mid)
+        return None
+    print("[send_failed]", code2, raw2)
     return None
-
-
-def prime_once():
-    db = load_db()
-    msgs = db.get("messages", [])
-    if msgs:
-        mark_responded(db, msgs[-1].get("id"))
-        save_db(db)
 
 
 def main():
     print(
-        f"[agent_loop] started port={PORT} pin={PIN} model={OLLAMA_MODEL} cooldown={RESPOND_COOLDOWN}s"
+        f"[agent_loop] started port={PORT} pin={PIN} model={OLLAMA_MODEL} interval={POLL_INTERVAL}s"
     )
-    prime_once()
     while True:
         try:
             process_once()

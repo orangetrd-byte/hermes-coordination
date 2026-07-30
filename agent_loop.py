@@ -85,7 +85,7 @@ def build_reply(message):
         "type": reply_type,
         "content": text,
         "status": reply_type if reply_type not in {"assign", "status", "done", "yield", "inference"} else "open",
-    +    "assigned_to": sender if reply_type == "assign" else "",
+        "assigned_to": sender if reply_type == "assign" else "",
     }
 
 

@@ -2,4 +2,7 @@
 .channel.json.*.tmp
 channel.json.bak
 server.key
+__pycache__/
+*.py[cod]
+*$py.class
 tests/__pycache__/

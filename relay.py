@@ -14,11 +14,20 @@ DATA = BASE / "channel.json"
 BACKUP = BASE / "channel.json.bak"
 LOCK = threading.Lock()
 PORT = int(os.environ["HERMES_CHANNEL_PORT"])
-HOST = os.environ["HERMES_CHANNEL_HOST"]
+HOST = os.environ.get("HERMES_CHANNEL_HOST", "127.0.0.1")
 PIN = os.environ["HERMES_CHANNEL_PIN"]
 CLAIM_TTL = int(os.environ.get("HERMES_CLAIM_TTL", "300"))
 CERT = BASE / "server.crt"
 KEY = BASE / "server.key"
+
+ALLOWED_PATHS = frozenset({
+    "/", "/index.html",
+    "/api/health", "/api/agents", "/api/messages", "/api/claim", "/api/reply",
+})
+
+MAX_PIN_FAILS = 10
+PIN_WINDOW_SECS = 60
+PIN_FAILS: dict[str, list[float]] = {}
 
 
 class DatabaseError(RuntimeError):
@@ -97,9 +106,22 @@ def _json(self, obj):
     self.end_headers()
     self.wfile.write(payload)
 
+def _throttle_pin(handler):
+    now = time.time()
+    client = handler.client_address[0]
+    fails = PIN_FAILS.setdefault(client, [])
+    while fails and fails[0] < now - PIN_WINDOW_SECS:
+        fails.pop(0)
+    if len(fails) >= MAX_PIN_FAILS:
+        return True
+    fails.append(now)
+    return False
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         p = self.path.split("?")[0]
+        if p not in ALLOWED_PATHS:
+            return _badge(self, 404, "not found")
         if p in ("/", "/index.html"):
             self.path = "/index.html"
             return self.serve_static("text/html")
@@ -107,6 +129,8 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, {"ok": True})
         req_pin = self.headers.get("X-Channel-PIN")
         if req_pin != PIN:
+            if _throttle_pin(self):
+                return _badge(self, 429, "Too Many PIN failures")
             return _badge(self, 401, "PIN required or invalid")
         try:
             if p == "/api/agents":
@@ -131,6 +155,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_POST(self):
         if self.headers.get("X-Channel-PIN") != PIN:
+            if _throttle_pin(self):
+                return _badge(self, 429, "Too Many PIN failures")
             return _badge(self, 401, "PIN required or invalid")
         try:
             body = _read_body(self)
@@ -142,20 +168,37 @@ class Handler(BaseHTTPRequestHandler):
         p = self.path.split("?")[0]
 
         if p == "/api/messages":
-            for k in ("from", "to", "content"):
-                if k not in body:
-                    return _badge(self, 400, f"missing {k}")
+            allowed_fields = {"from", "to", "content", "type", "status", "assigned_to"}
+            if set(body.keys()) - allowed_fields:
+                return _badge(self, 400, "unexpected fields")
+            for key in ("from", "to", "content"):
+                if key not in body or not isinstance(body[key], str) or not body[key].strip() or len(body[key]) > 64:
+                    return _badge(self, 400, f"invalid {key}")
+            if len(body.get("content", "")) > 4096:
+                return _badge(self, 413, "content too long")
+            msg_type = str(body.get("type", "chat")).lower()
+            if msg_type not in {"chat", "assign", "status", "done", "yield", "inference"}:
+                return _badge(self, 400, "invalid type")
+            status = str(body.get("status", "open")).lower()
+            if status not in {"open", "done", "yield", "inference"}:
+                return _badge(self, 400, "invalid status")
+            sender = str(body.get("from", ""))
+            recipient = str(body.get("to", ""))
+            internal = self.headers.get("X-Internal")
+            if internal != os.environ.get("HERMES_INTERNAL_API_SECRET"):
+                if sender in {"Ollama", "Hermes"} or recipient in {"Ollama", "Hermes"}:
+                    return _badge(self, 403, "impersonation blocked")
             with LOCK:
                 data = read_db()
                 msg = {
                     "id": int(datetime.datetime.now(datetime.UTC).strftime("%Y%m%d%H%M%S%f")),
                     "ts": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
-                    "from": str(body["from"]),
-                    "to": str(body["to"]),
-                    "type": body.get("type", "chat"),
-                    "content": str(body["content"]),
-                    "status": body.get("status", "open"),
-                    "assigned_to": body.get("assigned_to", ""),
+                    "from": sender,
+                    "to": recipient,
+                    "type": msg_type,
+                    "content": str(body["content"])[:4096],
+                    "status": status if msg_type not in {"assign", "status", "done", "yield", "inference"} else "open",
+                    "assigned_to": str(body.get("assigned_to", "")),
                 }
                 data["messages"].append(msg)
                 write_db(data)
@@ -167,6 +210,11 @@ class Handler(BaseHTTPRequestHandler):
                     return _badge(self, 400, f"missing {key}")
             source_id = body["source_id"]
             worker = str(body["worker"])
+            if not isinstance(source_id, int):
+                try:
+                    source_id = int(source_id)
+                except (TypeError, ValueError):
+                    return _badge(self, 400, "invalid source_id")
             now = time.time()
             try:
                 with LOCK:
@@ -198,6 +246,17 @@ class Handler(BaseHTTPRequestHandler):
                     return _badge(self, 400, f"missing {k}")
             source_id = body["source_id"]
             worker = str(body["worker"])
+            from_val = str(body["from"])
+            to_val = str(body["to"])
+            internal = self.headers.get("X-Internal")
+            if internal != os.environ.get("HERMES_INTERNAL_API_SECRET"):
+                if from_val in {"Ollama", "Hermes"} or to_val in {"Ollama", "Hermes"}:
+                    return _badge(self, 403, "impersonation blocked")
+            if not isinstance(source_id, int):
+                try:
+                    source_id = int(source_id)
+                except (TypeError, ValueError):
+                    return _badge(self, 400, "invalid source_id")
             with LOCK:
                 data = read_db()
                 if not _find_message(data, source_id):
@@ -215,11 +274,11 @@ class Handler(BaseHTTPRequestHandler):
                 replied = {
                     "id": int(datetime.datetime.now(datetime.UTC).strftime("%Y%m%d%H%M%S%f")),
                     "ts": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
-                    "from": str(body["from"]),
-                    "to": str(body["to"]),
-                    "type": body.get("type", "chat"),
-                    "content": str(body["content"]),
-                    "status": body.get("status", "open"),
+                    "from": from_val,
+                    "to": to_val,
+                    "type": str(body.get("type", "chat")).lower(),
+                    "content": str(body["content"])[:4096],
+                    "status": str(body.get("status", "open")).lower(),
                     "assigned_to": "",
                     "in_reply_to": source_id,
                 }
